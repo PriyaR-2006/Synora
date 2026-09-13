@@ -1,17 +1,44 @@
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
 
-# Environment / secrets
-.env
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
 
 # Synora runtime state
 backend/storage/synora_state.json
 
-# Generated compression output
-backend/tools/compressed/
+# Synora generated demo files
+backend/demo_data/demo_drive/compressed/
+backend/demo_data/demo_drive/quarantine/
+backend/demo_data/demo_drive/restored/
 
-# Generated quarantine files
+# Node
+frontend/node_modules/
+
+# Vite
+frontend/dist/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE / editor
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Synora temporary test artifacts
 backend/tools/quarantine/
-
-backend/demo_data/demo_drive/fake_test.exe
+backend/demo_data/demo_drive/agent_new_test.txt

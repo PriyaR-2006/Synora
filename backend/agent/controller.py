@@ -37,6 +37,13 @@ def run_mission(
         asdict(state)
     )
 
+    # Keep all agent-generated files inside
+    # the same demo storage area used by the
+    # Synora dashboard.
+    compressed_directory = (
+        f"{directory}/compressed"
+    )
+
     for _ in range(max_cycles):
 
         # ---------------------------------------------
@@ -104,7 +111,7 @@ def run_mission(
             state = execute_compression(
                 state,
                 action,
-                "tools/compressed",
+                compressed_directory,
             )
 
         elif action["action_type"] == "DUPLICATE_REVIEW":

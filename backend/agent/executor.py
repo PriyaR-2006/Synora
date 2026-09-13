@@ -18,7 +18,8 @@ def execute_compression(
     HIGH-risk files are blocked.
     LOW and MEDIUM-risk files may proceed.
     The compressed copy is verified before the
-    original is moved into quarantine.
+    original is moved into the Synora quarantine
+    directory.
     """
 
     file_path = Path(action["path"])
@@ -109,9 +110,14 @@ def execute_compression(
         # QUARANTINE ORIGINAL
         # -------------------------------------------------
 
+        quarantine_directory = (
+            Path(output_directory).parent
+            / "quarantine"
+        )
+
         quarantine_path = quarantine_file(
             str(file_path),
-            "tools/quarantine",
+            str(quarantine_directory),
         )
 
         quarantine = Path(quarantine_path)
