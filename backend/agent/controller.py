@@ -25,9 +25,16 @@ def run_mission(
     7. Replans when necessary
 
     The mission state is saved after every cycle.
+
+    If an action requires approval, the mission pauses
+    in WAITING_FOR_APPROVAL state instead of continuing.
     """
 
     if state.status == "COMPLETED":
+        save_mission(asdict(state))
+        return state
+
+    if state.status == "WAITING_FOR_APPROVAL":
         save_mission(asdict(state))
         return state
 
@@ -159,6 +166,13 @@ def run_mission(
         save_mission(
             asdict(state)
         )
+
+        # ---------------------------------------------
+        # WAIT FOR APPROVAL
+        # ---------------------------------------------
+
+        if state.status == "WAITING_FOR_APPROVAL":
+            break
 
         # ---------------------------------------------
         # GOAL REACHED

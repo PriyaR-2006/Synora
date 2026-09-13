@@ -1,31 +1,100 @@
 from pathlib import Path
+import gzip
+import tempfile
 
 
 def simulate_compression(file_info: dict) -> dict:
     """
     Estimate the result of compressing a file.
 
-    This does not modify the file.
+    Performs a real gzip compression in a temporary file so the
+    planner can make a realistic storage-saving estimate.
+
+    The original file is never modified.
     """
 
-    size = file_info["size_bytes"]
-    path = Path(file_info["path"])
+    source = Path(file_info["path"])
 
-    # Conservative estimate: gzip may reduce a file to
-    # roughly 60% of its original size.
-    estimated_size = int(size * 0.6)
+    if not source.exists():
+        return {
+            "action_type": "COMPRESS",
+            "path": str(source),
+            "original_size_bytes": 0,
+            "estimated_size_bytes": 0,
+            "estimated_recovered_bytes": 0,
+            "profitable": False,
+        }
+
+    if not source.is_file():
+        return {
+            "action_type": "COMPRESS",
+            "path": str(source),
+            "original_size_bytes": 0,
+            "estimated_size_bytes": 0,
+            "estimated_recovered_bytes": 0,
+            "profitable": False,
+        }
+
+    original_size = source.stat().st_size
+
+    if original_size <= 0:
+        return {
+            "action_type": "COMPRESS",
+            "path": str(source),
+            "original_size_bytes": original_size,
+            "estimated_size_bytes": 0,
+            "estimated_recovered_bytes": 0,
+            "profitable": False,
+        }
+
+    temp_path = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            suffix=".gz",
+            delete=False,
+        ) as temp_file:
+            temp_path = Path(temp_file.name)
+
+        with source.open("rb") as source_file:
+            with gzip.open(
+                temp_path,
+                "wb",
+            ) as compressed_file:
+
+                while chunk := source_file.read(
+                    1024 * 1024
+                ):
+                    compressed_file.write(chunk)
+
+        estimated_size = temp_path.stat().st_size
+
+    except Exception:
+        return {
+            "action_type": "COMPRESS",
+            "path": str(source),
+            "original_size_bytes": original_size,
+            "estimated_size_bytes": 0,
+            "estimated_recovered_bytes": 0,
+            "profitable": False,
+        }
+
+    finally:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()
 
     recovered = max(
         0,
-        size - estimated_size,
+        original_size - estimated_size,
     )
 
     return {
         "action_type": "COMPRESS",
-        "path": str(path),
-        "original_size_bytes": size,
+        "path": str(source),
+        "original_size_bytes": original_size,
         "estimated_size_bytes": estimated_size,
         "estimated_recovered_bytes": recovered,
+        "profitable": recovered > 0,
     }
 
 
@@ -42,6 +111,7 @@ def simulate_quarantine(file_info: dict) -> dict:
         "path": file_info["path"],
         "original_size_bytes": file_info["size_bytes"],
         "estimated_recovered_bytes": 0,
+        "profitable": False,
     }
 
 

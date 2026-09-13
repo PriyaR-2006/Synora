@@ -1,3 +1,4 @@
+
 from pathlib import Path
 
 from agent.state import MissionState
@@ -15,24 +16,37 @@ def calculate_action_score(file_info: dict) -> float:
     Higher scores indicate better candidates.
     """
 
-    risk_level = file_info.get("risk_level", "MEDIUM")
-    future_value = file_info.get("future_value", 0.5)
-    size_bytes = file_info.get("size_bytes", 0)
+    risk_level = file_info.get(
+        "risk_level",
+        "MEDIUM",
+    )
+
+    future_value = file_info.get(
+        "future_value",
+        0.5,
+    )
+
+    size_bytes = file_info.get(
+        "size_bytes",
+        0,
+    )
 
     # HIGH-risk files must never be planned.
     if risk_level == "HIGH":
         return -1
 
-    # Prefer LOW-risk files over MEDIUM-risk files.
     risk_score = {
         "LOW": 1.0,
         "MEDIUM": 0.4,
-    }.get(risk_level, 0.0)
+    }.get(
+        risk_level,
+        0.0,
+    )
 
-    # Prefer files with lower future value.
-    preservation_score = 1.0 - future_value
+    preservation_score = (
+        1.0 - future_value
+    )
 
-    # Give larger files a small priority bonus.
     size_score = min(
         size_bytes / 1_000_000,
         10,
@@ -50,10 +64,8 @@ def choose_duplicate_to_keep(
     value_by_path: dict[str, float],
 ) -> dict:
     """
-    Choose which file in a duplicate group should be preserved.
-
-    Higher future-value files are preferred.
-    If future value is equal, the larger file is preferred.
+    Choose which file in a duplicate group
+    should be preserved.
     """
 
     return max(
@@ -78,12 +90,15 @@ def create_plan(
     The planner:
 
     - Detects duplicate files
+    - Avoids repeating completed duplicate reviews
+    - Calculates potential duplicate recovery
     - Protects HIGH-risk files
     - Avoids protected files
     - Avoids successfully completed files
     - Avoids previously failed files
     - Avoids missing files
     - Avoids empty files
+    - Avoids unprofitable compression
     - Uses future value and risk for prioritization
     - Does not automatically delete duplicates
     """
@@ -92,10 +107,6 @@ def create_plan(
         return state
 
     state.status = "PLANNING"
-
-    # -------------------------------------------------
-    # BUILD STORAGE CONTEXT
-    # -------------------------------------------------
 
     context = build_storage_context(
         directory
@@ -109,10 +120,6 @@ def create_plan(
         files
     )
 
-    # -------------------------------------------------
-    # BUILD FUTURE-VALUE LOOKUP
-    # -------------------------------------------------
-
     value_by_path = {
         file_info["path"]: file_info[
             "future_value"
@@ -120,19 +127,54 @@ def create_plan(
         for file_info in files
     }
 
-    # -------------------------------------------------
-    # DUPLICATE DETECTION
-    # -------------------------------------------------
-
     duplicate_groups = find_duplicates(
         files
     )
+
+    # --------------------------------------------------
+    # DUPLICATE REVIEW HISTORY
+    # --------------------------------------------------
+
+    reviewed_duplicate_pairs = set()
+
+    for action in state.completed_actions:
+
+        if action.get("action_type") != (
+            "DUPLICATE_REVIEW"
+        ):
+            continue
+
+        keep_path = action.get(
+            "keep_path"
+        )
+
+        duplicate_paths = action.get(
+            "duplicate_paths",
+            [],
+        )
+
+        if not keep_path:
+            continue
+
+        for duplicate_path in duplicate_paths:
+
+            pair = tuple(
+                sorted(
+                    [
+                        keep_path,
+                        duplicate_path,
+                    ]
+                )
+            )
+
+            reviewed_duplicate_pairs.add(
+                pair
+            )
 
     duplicate_candidates = []
 
     for group in duplicate_groups:
 
-        # Ignore groups containing only one usable file.
         if len(group) < 2:
             continue
 
@@ -148,6 +190,35 @@ def create_plan(
             != keep_file["path"]
         ]
 
+        # Check whether this duplicate group
+        # has already been reviewed.
+        already_reviewed = True
+
+        for duplicate_path in duplicate_paths:
+
+            pair = tuple(
+                sorted(
+                    [
+                        keep_file["path"],
+                        duplicate_path,
+                    ]
+                )
+            )
+
+            if pair not in reviewed_duplicate_pairs:
+                already_reviewed = False
+                break
+
+        if already_reviewed:
+            continue
+
+        potential_recovered_bytes = sum(
+            file_info["size_bytes"]
+            for file_info in group
+            if file_info["path"]
+            != keep_file["path"]
+        )
+
         duplicate_candidates.append(
             {
                 "action_type": "DUPLICATE_REVIEW",
@@ -155,6 +226,9 @@ def create_plan(
                 "duplicate_paths": duplicate_paths,
                 "duplicate_count": len(
                     duplicate_paths
+                ),
+                "potential_recovered_bytes": (
+                    potential_recovered_bytes
                 ),
                 "reason": (
                     "Identical file contents detected. "
@@ -164,9 +238,9 @@ def create_plan(
             }
         )
 
-    # -------------------------------------------------
-    # COMPLETED ACTION HISTORY
-    # -------------------------------------------------
+    # --------------------------------------------------
+    # COMPLETED / FAILED PATHS
+    # --------------------------------------------------
 
     completed_paths = {
         action["path"]
@@ -174,10 +248,6 @@ def create_plan(
         if action.get("status")
         == "VERIFIED_AND_QUARANTINED"
     }
-
-    # -------------------------------------------------
-    # FAILED ACTION HISTORY
-    # -------------------------------------------------
 
     failed_paths = {
         action["path"]
@@ -189,9 +259,9 @@ def create_plan(
         }
     }
 
-    # -------------------------------------------------
-    # FILTER ELIGIBLE FILES
-    # -------------------------------------------------
+    # --------------------------------------------------
+    # ELIGIBLE COMPRESSION FILES
+    # --------------------------------------------------
 
     eligible_files = []
 
@@ -199,29 +269,21 @@ def create_plan(
 
         file_path = file_info["path"]
 
-        # Protected files are never considered.
         if file_path in state.protected_paths:
             continue
 
-        # Already successfully processed files
-        # should not be processed again.
         if file_path in completed_paths:
             continue
 
-        # Previously failed files should not
-        # automatically retry.
         if file_path in failed_paths:
             continue
 
-        # File must still exist.
         if not Path(file_path).exists():
             continue
 
-        # Skip empty files.
         if file_info["size_bytes"] <= 0:
             continue
 
-        # HIGH-risk files never enter the plan.
         if file_info.get("risk_level") == "HIGH":
             continue
 
@@ -229,9 +291,9 @@ def create_plan(
             file_info
         )
 
-    # -------------------------------------------------
-    # SIMULATE COMPRESSION
-    # -------------------------------------------------
+    # --------------------------------------------------
+    # SIMULATION
+    # --------------------------------------------------
 
     simulations = simulate_files(
         eligible_files
@@ -243,6 +305,12 @@ def create_plan(
         simulations,
         eligible_files,
     ):
+
+        if not simulation.get(
+            "profitable",
+            False,
+        ):
+            continue
 
         estimated_recovered = (
             simulation[
@@ -281,10 +349,6 @@ def create_plan(
             }
         )
 
-    # -------------------------------------------------
-    # PRIORITIZE COMPRESSION ACTIONS
-    # -------------------------------------------------
-
     compression_candidates.sort(
         key=lambda item: item[
             "priority_score"
@@ -292,21 +356,17 @@ def create_plan(
         reverse=True,
     )
 
-    # -------------------------------------------------
-    # CREATE FINAL PLAN
-    # -------------------------------------------------
+    # --------------------------------------------------
+    # FINAL PLAN
+    # --------------------------------------------------
 
     state.planned_actions.clear()
 
-    # Compression actions come first because they
-    # can directly recover measurable storage.
     for candidate in compression_candidates:
         state.planned_actions.append(
             candidate
         )
 
-    # Duplicate reviews are informational and do
-    # not automatically delete anything.
     for duplicate in duplicate_candidates:
         state.planned_actions.append(
             duplicate
