@@ -1,4 +1,3 @@
-
 from pathlib import Path
 
 from agent.state import MissionState
@@ -95,7 +94,8 @@ def create_plan(
     - Protects HIGH-risk files
     - Avoids protected files
     - Avoids successfully completed files
-    - Avoids previously failed files
+    - Avoids genuinely failed files
+    - Allows approval-required actions to be reconsidered
     - Avoids missing files
     - Avoids empty files
     - Avoids unprofitable compression
@@ -107,6 +107,10 @@ def create_plan(
         return state
 
     state.status = "PLANNING"
+
+    # --------------------------------------------------
+    # BUILD STORAGE CONTEXT
+    # --------------------------------------------------
 
     context = build_storage_context(
         directory
@@ -249,12 +253,15 @@ def create_plan(
         == "VERIFIED_AND_QUARANTINED"
     }
 
+    # IMPORTANT:
+    # APPROVAL_REQUIRED is intentionally NOT included
+    # here. A file waiting for approval should remain
+    # eligible once the user approves it.
     failed_paths = {
         action["path"]
         for action in state.failed_actions
         if action.get("status") in {
             "BLOCKED",
-            "APPROVAL_REQUIRED",
             "FAILED",
         }
     }
@@ -306,6 +313,8 @@ def create_plan(
         eligible_files,
     ):
 
+        # Ignore simulations that do not actually
+        # recover storage.
         if not simulation.get(
             "profitable",
             False,
@@ -349,6 +358,7 @@ def create_plan(
             }
         )
 
+    # Highest-priority compression candidates first.
     compression_candidates.sort(
         key=lambda item: item[
             "priority_score"
@@ -362,12 +372,19 @@ def create_plan(
 
     state.planned_actions.clear()
 
+    # Compression actions are placed first so the
+    # mission can recover real storage before handling
+    # informational duplicate reviews.
     for candidate in compression_candidates:
+
         state.planned_actions.append(
             candidate
         )
 
+    # Duplicate review is informational only.
+    # It never automatically deletes a file.
     for duplicate in duplicate_candidates:
+
         state.planned_actions.append(
             duplicate
         )

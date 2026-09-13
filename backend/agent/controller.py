@@ -1,3 +1,4 @@
+
 from dataclasses import asdict
 
 from agent.state import MissionState
@@ -14,29 +15,28 @@ def run_mission(
     """
     Run Synora as a persistent goal-driven agent.
 
-    The agent repeatedly:
+    Flow:
+    1. Plan
+    2. Select action
+    3. Execute
+    4. Verify
+    5. Update state
+    6. Save state
+    7. Replan if required
 
-    1. Plans
-    2. Selects an action
-    3. Executes it
-    4. Verifies it
-    5. Updates state
-    6. Saves state
-    7. Replans when necessary
-
-    The mission state is saved after every cycle.
-
-    If an action requires approval, the mission pauses
-    in WAITING_FOR_APPROVAL state instead of continuing.
+    Human approval pauses the mission safely.
     """
 
+    # Already finished
     if state.status == "COMPLETED":
         save_mission(asdict(state))
         return state
 
+    # Waiting for user approval
     if state.status == "WAITING_FOR_APPROVAL":
         save_mission(asdict(state))
         return state
+
 
     state.status = "RUNNING"
 
@@ -44,14 +44,14 @@ def run_mission(
         asdict(state)
     )
 
-    # Keep all agent-generated files inside
-    # the same demo storage area used by the
-    # Synora dashboard.
+
     compressed_directory = (
         f"{directory}/compressed"
     )
 
+
     for _ in range(max_cycles):
+
 
         # ---------------------------------------------
         # CHECK GOAL
@@ -61,6 +61,7 @@ def run_mission(
             state.recovered_bytes
             >= state.target_storage_bytes
         ):
+
             state.status = "COMPLETED"
             state.planned_actions.clear()
 
@@ -70,18 +71,64 @@ def run_mission(
 
             break
 
+
+
         # ---------------------------------------------
         # PLAN
         # ---------------------------------------------
+
+        # FIX:
+        # create_plan() rebuilds planned_actions from
+        # scratch (it clears the list), which would
+        # otherwise discard any action that was just
+        # approved via approve_pending_action() and is
+        # sitting at the front of the queue waiting to
+        # be executed with approved=True. Preserve those
+        # already-approved actions across replanning.
+
+        approved_actions = [
+            action
+            for action in state.planned_actions
+            if action.get("approved") is True
+        ]
 
         state = create_plan(
             state,
             directory,
         )
 
+        if approved_actions:
+            approved_paths = {
+                action.get("path")
+                for action in approved_actions
+            }
+
+            state.planned_actions = [
+                action
+                for action in state.planned_actions
+                if action.get("path") not in approved_paths
+            ]
+
+            state.planned_actions[0:0] = approved_actions
+
+
+        # FIX:
+        # Remove stale approval errors.
+        # Otherwise every approval creates duplicates.
+
+        state.failed_actions = [
+            action
+            for action in state.failed_actions
+            if action.get("status")
+            != "APPROVAL_REQUIRED"
+        ]
+
+
         save_mission(
             asdict(state)
         )
+
+
 
         # ---------------------------------------------
         # NO ACTIONS AVAILABLE
@@ -94,8 +141,10 @@ def run_mission(
                 >= state.target_storage_bytes
             ):
                 state.status = "COMPLETED"
+
             else:
                 state.status = "NO_SAFE_ACTIONS"
+
 
             save_mission(
                 asdict(state)
@@ -103,14 +152,18 @@ def run_mission(
 
             break
 
+
+
         # ---------------------------------------------
-        # SELECT NEXT ACTION
+        # SELECT ACTION
         # ---------------------------------------------
 
         action = state.planned_actions.pop(0)
 
+
+
         # ---------------------------------------------
-        # EXECUTE
+        # EXECUTE ACTION
         # ---------------------------------------------
 
         if action["action_type"] == "COMPRESS":
@@ -119,26 +172,34 @@ def run_mission(
                 state,
                 action,
                 compressed_directory,
+                approved=action.get("approved", False),
             )
+
 
         elif action["action_type"] == "DUPLICATE_REVIEW":
 
-            # Duplicate review is informational.
-            # Synora does not automatically delete
-            # duplicate files.
+
             state.completed_actions.append(
                 {
                     "action_type": "DUPLICATE_REVIEW",
-                    "keep_path": action["keep_path"],
+
+                    "keep_path": action[
+                        "keep_path"
+                    ],
+
                     "duplicate_paths": action[
                         "duplicate_paths"
                     ],
+
                     "duplicate_count": action[
                         "duplicate_count"
                     ],
-                    "status": "REVIEW_REQUIRED",
+
+                    "status":
+                        "REVIEW_REQUIRED",
                 }
             )
+
 
         else:
 
@@ -148,42 +209,55 @@ def run_mission(
                         "action_type",
                         "UNKNOWN",
                     ),
+
                     "path": action.get(
                         "path",
                         "",
                     ),
-                    "status": "FAILED",
-                    "error": (
-                        "Unknown action type."
-                    ),
+
+                    "status":
+                        "FAILED",
+
+                    "error":
+                        "Unknown action type.",
                 }
             )
 
+
+
         # ---------------------------------------------
-        # SAVE AFTER ACTION
+        # SAVE
         # ---------------------------------------------
 
         save_mission(
             asdict(state)
         )
 
+
+
         # ---------------------------------------------
-        # WAIT FOR APPROVAL
+        # WAIT APPROVAL
         # ---------------------------------------------
 
         if state.status == "WAITING_FOR_APPROVAL":
+
             break
 
+
+
         # ---------------------------------------------
-        # GOAL REACHED
+        # GOAL COMPLETE
         # ---------------------------------------------
 
         if (
             state.recovered_bytes
             >= state.target_storage_bytes
         ):
+
             state.status = "COMPLETED"
+
             state.planned_actions.clear()
+
 
             save_mission(
                 asdict(state)
@@ -191,11 +265,16 @@ def run_mission(
 
             break
 
+
+
         # ---------------------------------------------
-        # REPLAN AFTER FAILURE
+        # REPLAN
         # ---------------------------------------------
 
         if state.status == "REPLANNING":
+
             continue
+
+
 
     return state

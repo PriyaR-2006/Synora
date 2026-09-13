@@ -30,10 +30,16 @@ function App() {
   const [missionGoal, setMissionGoal] = useState(
     "Recover storage safely"
   );
+
   const [missionTarget, setMissionTarget] = useState("1");
   const [mission, setMission] = useState(null);
   const [startingMission, setStartingMission] = useState(false);
   const [loadingMission, setLoadingMission] = useState(false);
+  const [approvingMission, setApprovingMission] = useState(false);
+
+  // ---------------------------------------------------------
+  // SCAN
+  // ---------------------------------------------------------
 
   const scanDirectory = async () => {
     setScanning(true);
@@ -74,6 +80,10 @@ function App() {
     }
   };
 
+  // ---------------------------------------------------------
+  // QUARANTINE SCAN
+  // ---------------------------------------------------------
+
   const scanQuarantine = async () => {
     setScanningQuarantine(true);
     setError("");
@@ -102,6 +112,10 @@ function App() {
       setScanningQuarantine(false);
     }
   };
+
+  // ---------------------------------------------------------
+  // COMPRESS
+  // ---------------------------------------------------------
 
   const compressFile = async (filePath) => {
     setCompressingFile(filePath);
@@ -139,6 +153,10 @@ function App() {
       setCompressingFile("");
     }
   };
+
+  // ---------------------------------------------------------
+  // QUARANTINE
+  // ---------------------------------------------------------
 
   const quarantineFile = async (filePath) => {
     setQuarantiningFile(filePath);
@@ -178,6 +196,10 @@ function App() {
     }
   };
 
+  // ---------------------------------------------------------
+  // RESTORE
+  // ---------------------------------------------------------
+
   const restoreFile = async (filePath) => {
     setRestoringFile(filePath);
     setError("");
@@ -215,6 +237,10 @@ function App() {
       setRestoringFile("");
     }
   };
+
+  // ---------------------------------------------------------
+  // VERIFY
+  // ---------------------------------------------------------
 
   const verifyFile = async (filePath) => {
     const expectedHash = verificationHashes[filePath];
@@ -270,6 +296,10 @@ function App() {
       setVerifyingFile("");
     }
   };
+
+  // ---------------------------------------------------------
+  // START MISSION
+  // ---------------------------------------------------------
 
   const startMission = async () => {
     const targetBytes = Number(missionTarget);
@@ -327,6 +357,59 @@ function App() {
     }
   };
 
+  // ---------------------------------------------------------
+  // APPROVE + RESUME MISSION
+  // ---------------------------------------------------------
+
+  const approveMission = async () => {
+    if (!mission?.mission_id) {
+      setError("No mission is available for approval.");
+      return;
+    }
+
+    setApprovingMission(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const response = await fetch(
+        `${API_URL}/mission/approve?mission_id=${encodeURIComponent(
+          mission.mission_id
+        )}&directory=${encodeURIComponent(
+          SCAN_DIRECTORY
+        )}&max_cycles=10`,
+        {
+          method: "POST",
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail || "Failed to approve mission"
+        );
+      }
+
+      setMission(data);
+
+      setMessage(
+        `Mission resumed. Status: ${data.status}`
+      );
+
+      await scanDirectory();
+      await scanQuarantine();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setApprovingMission(false);
+    }
+  };
+
+  // ---------------------------------------------------------
+  // LOAD MISSION
+  // ---------------------------------------------------------
+
   const loadMission = async () => {
     setLoadingMission(true);
     setError("");
@@ -351,6 +434,10 @@ function App() {
       setLoadingMission(false);
     }
   };
+
+  // ---------------------------------------------------------
+  // STATS
+  // ---------------------------------------------------------
 
   const totalStorageBytes = files.reduce(
     (total, file) => total + file.size_bytes,
@@ -384,6 +471,10 @@ function App() {
     (file) => !file.name.toLowerCase().endsWith(".gz")
   );
 
+  // ---------------------------------------------------------
+  // UI
+  // ---------------------------------------------------------
+
   return (
     <div className="app">
       <header className="topbar">
@@ -395,6 +486,9 @@ function App() {
       </header>
 
       <main className="dashboard">
+
+        {/* HERO */}
+
         <section className="hero">
           <h1>Your files, under control.</h1>
 
@@ -411,6 +505,8 @@ function App() {
           </button>
         </section>
 
+        {/* MESSAGES */}
+
         {message && (
           <div className="success-message">
             {message}
@@ -422,6 +518,8 @@ function App() {
             {error}
           </div>
         )}
+
+        {/* STATS */}
 
         <section className="stats">
           <div className="stat-card">
@@ -449,6 +547,8 @@ function App() {
           </div>
         </section>
 
+        {/* MISSION */}
+
         <section className="recent">
           <div className="section-header">
             <div>
@@ -471,7 +571,9 @@ function App() {
                   setMissionGoal(event.target.value)
                 }
                 placeholder="Recover storage safely"
-                disabled={startingMission}
+                disabled={
+                  startingMission || approvingMission
+                }
               />
             </div>
 
@@ -485,7 +587,9 @@ function App() {
                 onChange={(event) =>
                   setMissionTarget(event.target.value)
                 }
-                disabled={startingMission}
+                disabled={
+                  startingMission || approvingMission
+                }
               />
             </div>
 
@@ -493,7 +597,10 @@ function App() {
               <button
                 className="scan-button"
                 onClick={startMission}
-                disabled={startingMission}
+                disabled={
+                  startingMission ||
+                  approvingMission
+                }
               >
                 {startingMission
                   ? "Running Mission..."
@@ -503,7 +610,10 @@ function App() {
               <button
                 className="compress-button"
                 onClick={loadMission}
-                disabled={loadingMission}
+                disabled={
+                  loadingMission ||
+                  approvingMission
+                }
               >
                 {loadingMission
                   ? "Loading..."
@@ -514,6 +624,9 @@ function App() {
 
           {mission && (
             <div className="mission-result">
+
+              {/* MISSION HEADER */}
+
               <div className="mission-header">
                 <div>
                   <strong>
@@ -529,6 +642,70 @@ function App() {
                   {mission.status}
                 </span>
               </div>
+
+              {/* APPROVAL PANEL */}
+
+              {mission.status ===
+                "WAITING_FOR_APPROVAL" && (
+                <div className="mission-approval">
+                  <h3>Approval Required</h3>
+
+                  <p>
+                    Synora has identified an action that
+                    requires your explicit approval before
+                    modifying your files.
+                  </p>
+
+                  {mission.failed_actions?.length > 0 && (
+                    <div className="approval-action">
+                      {mission.failed_actions
+                        .filter(
+                          (action) =>
+                            action.status ===
+                            "APPROVAL_REQUIRED"
+                        )
+                        .map((action, index) => (
+                          <div
+                            className="mission-action"
+                            key={`${action.path || action.action_type}-${index}`}
+                          >
+                            <span>⚠</span>
+
+                            <div>
+                              <strong>
+                                {action.action_type}
+                              </strong>
+
+                              {action.path && (
+                                <span>
+                                  {action.path}
+                                </span>
+                              )}
+
+                              {action.error && (
+                                <span>
+                                  {action.error}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+
+                  <button
+                    className="scan-button"
+                    onClick={approveMission}
+                    disabled={approvingMission}
+                  >
+                    {approvingMission
+                      ? "Approving..."
+                      : "Approve & Continue"}
+                  </button>
+                </div>
+              )}
+
+              {/* MISSION STATS */}
 
               <div className="mission-stats">
                 <div>
@@ -572,6 +749,8 @@ function App() {
                 </div>
               </div>
 
+              {/* COMPLETED ACTIONS */}
+
               {mission.completed_actions?.length > 0 && (
                 <div className="mission-actions">
                   <h3>Completed Actions</h3>
@@ -612,9 +791,16 @@ function App() {
                 </div>
               )}
 
+              {/* FAILED / PENDING ACTIONS */}
+
               {mission.failed_actions?.length > 0 && (
                 <div className="mission-actions">
-                  <h3>Failed Actions</h3>
+                  <h3>
+                    {mission.status ===
+                    "WAITING_FOR_APPROVAL"
+                      ? "Pending Actions"
+                      : "Failed Actions"}
+                  </h3>
 
                   {mission.failed_actions.map(
                     (action, index) => (
@@ -622,7 +808,12 @@ function App() {
                         className="mission-action"
                         key={`${action.path || action.action_type}-${index}`}
                       >
-                        <span>✗</span>
+                        <span>
+                          {action.status ===
+                          "APPROVAL_REQUIRED"
+                            ? "⚠"
+                            : "✗"}
+                        </span>
 
                         <div>
                           <strong>
@@ -646,6 +837,8 @@ function App() {
                   )}
                 </div>
               )}
+
+              {/* PROTECTED FILES */}
 
               {mission.protected_paths?.length > 0 && (
                 <div className="mission-actions">
@@ -674,6 +867,8 @@ function App() {
             </div>
           )}
         </section>
+
+        {/* RECENT FINDINGS */}
 
         <section className="recent">
           <h2>Recent Findings</h2>
@@ -807,6 +1002,8 @@ function App() {
             </div>
           )}
         </section>
+
+        {/* QUARANTINE */}
 
         <section className="recent">
           <div className="section-header">

@@ -83,11 +83,11 @@ class MissionState:
 
     def approve_pending_action(self) -> dict[str, Any]:
         """
-        Approve the most recent action that is waiting
+        Approve the most recent action waiting
         for user approval.
 
-        Returns the approved action so the controller
-        can execute it.
+        Removes the approval request and places
+        the action back into the execution queue.
         """
 
         if self.status != "WAITING_FOR_APPROVAL":
@@ -95,12 +95,28 @@ class MissionState:
                 "No action is currently waiting for approval."
             )
 
-        for action in reversed(self.failed_actions):
+        for index in range(
+            len(self.failed_actions) - 1,
+            -1,
+            -1,
+        ):
+            action = self.failed_actions[index]
+
             if action.get("status") == "APPROVAL_REQUIRED":
                 approved_action = dict(action)
 
                 approved_action["approved"] = True
 
+                # Remove stale approval entry.
+                self.failed_actions.pop(index)
+
+                # Put action back into execution queue.
+                self.planned_actions.insert(
+                    0,
+                    approved_action,
+                )
+
+                # Continue mission.
                 self.status = "RUNNING"
 
                 return approved_action
