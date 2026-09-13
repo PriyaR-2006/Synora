@@ -11,7 +11,15 @@ def save_mission(state: dict[str, Any]) -> None:
     Save mission state to disk.
     """
 
-    with DATABASE_FILE.open("w", encoding="utf-8") as file:
+    DATABASE_FILE.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with DATABASE_FILE.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
         json.dump(
             state,
             file,
@@ -23,13 +31,16 @@ def load_mission() -> dict[str, Any] | None:
     """
     Load the saved mission state.
 
-    Returns None if no mission has been saved yet.
+    Returns None if no mission has been saved.
     """
 
     if not DATABASE_FILE.exists():
         return None
 
-    with DATABASE_FILE.open("r", encoding="utf-8") as file:
+    with DATABASE_FILE.open(
+        "r",
+        encoding="utf-8",
+    ) as file:
         return json.load(file)
 
 

@@ -1,8 +1,17 @@
-.venv/
+# Python
 __pycache__/
 *.pyc
+
+# Environment / secrets
 .env
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
+
+# Synora runtime state
+backend/storage/synora_state.json
+
+# Generated compression output
+backend/tools/compressed/
+
+# Generated quarantine files
+backend/tools/quarantine/
+
+backend/demo_data/demo_drive/fake_test.exe

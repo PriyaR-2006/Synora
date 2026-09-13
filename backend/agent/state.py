@@ -1,3 +1,4 @@
+
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,6 +16,10 @@ class MissionState:
     recovered_bytes: int = 0
     status: str = "CREATED"
 
+    planned_actions: list[dict[str, Any]] = field(
+        default_factory=list
+    )
+
     completed_actions: list[dict[str, Any]] = field(
         default_factory=list
     )
@@ -31,13 +36,14 @@ class MissionState:
 
     def record_success(self, action: dict[str, Any]) -> None:
         """
-        Record a successful action.
+        Record a successfully completed action.
         """
 
         self.completed_actions.append(action)
 
         self.recovered_bytes += action.get(
-            "storage_recovered_bytes", 0
+            "storage_recovered_bytes",
+            0,
         )
 
         self.check_goal()
@@ -60,6 +66,11 @@ class MissionState:
 
         if self.recovered_bytes >= self.target_storage_bytes:
             self.status = "COMPLETED"
+
+            # No remaining actions are needed once
+            # the storage goal has been achieved.
+            self.planned_actions.clear()
+
             return True
 
         return False
