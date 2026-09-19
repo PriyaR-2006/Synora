@@ -27,8 +27,16 @@ def create_mission_from_request(
         ],
     )
 
-    # Store the AI-generated constraints as part
-    # of the mission metadata.
+    # Store the AI-generated constraints and strategy as part of the
+    # mission state, so the planner/executor/policy engine can consult
+    # them (e.g. delete_prohibited, workspace, approval_required_for).
+    state.constraints = mission.get("constraints", {})
+    state.strategy = mission.get("strategy", "")
+
+    workspace = state.constraints.get("workspace")
+    if workspace:
+        state.workspace_root = workspace
+
     state.planned_actions = []
 
     save_mission(
@@ -51,13 +59,13 @@ def run_ai_mission(
 
         User request
             ↓
-        AI reasoning
+        AI reasoning (Goal Interpreter)
             ↓
-        MissionState
+        MissionState (with constraints + strategy attached)
             ↓
         Deterministic planner
             ↓
-        Safe executor
+        Policy-aware executor
             ↓
         Verification
             ↓

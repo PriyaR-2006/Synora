@@ -1,16 +1,29 @@
-from pathlib import Path
 import gzip
+from pathlib import Path
 
-from agent.state import (
-    MissionState,
-    SAFE_MODE,
-    ASK_BEFORE_ACTION_MODE,
-    AUTONOMOUS_MODE,
-)
-
-from engines.risk import assess_file_risk
+from agent.state import MissionState
+from policy.engine import evaluate_file_action
 from tools.compression import compress_file
 from tools.quarantine import quarantine_file
+from tools.verification import calculate_hash
+
+
+def _hash_of_gzip_contents(gzip_path: Path) -> str:
+    """
+    Compute the SHA-256 hash of the *decompressed* contents of a gzip
+    file, so it can be compared against the original file's hash
+    without ever holding either file's full contents in memory at once.
+    """
+
+    from hashlib import sha256
+
+    hasher = sha256()
+
+    with gzip.open(gzip_path, "rb") as compressed_file:
+        while chunk := compressed_file.read(1024 * 1024):
+            hasher.update(chunk)
+
+    return hasher.hexdigest()
 
 
 def execute_compression(
@@ -22,8 +35,8 @@ def execute_compression(
     """
     Execute one compression action safely.
 
-    Approval-aware execution:
-    
+    Approval-aware execution (decision now made by policy.engine):
+
     SAFE:
         Requires approval unless action contains approved=True.
 
@@ -63,16 +76,18 @@ def execute_compression(
         }
 
 
-        risk_level = assess_file_risk(
-            file_info
+        # ---------------------------------------------
+        # POLICY DECISION (risk + approval, combined)
+        # ---------------------------------------------
+
+        decision = evaluate_file_action(
+            action_type="COMPRESS",
+            file_info=file_info,
+            operation_mode=state.operation_mode,
+            approved=approved,
         )
 
-
-        # ---------------------------------------------
-        # HIGH RISK PROTECTION
-        # ---------------------------------------------
-
-        if risk_level == "HIGH":
+        if decision.denied:
 
             state.protected_paths.append(
                 str(file_path)
@@ -82,68 +97,29 @@ def execute_compression(
                 {
                     "action_type": "COMPRESS",
                     "path": str(file_path),
-                    "risk_level": risk_level,
+                    "risk_level": decision.risk_level,
                     "operation_mode": state.operation_mode,
                     "status": "BLOCKED",
-                    "error":
-                        "HIGH-risk file is protected from modification.",
+                    "error": decision.reason,
                 }
             )
 
             return state
 
-
-
-        # ---------------------------------------------
-        # CHECK APPROVAL POLICY
-        # ---------------------------------------------
-
-        approval_required = False
-
-
-        if state.operation_mode == SAFE_MODE:
-
-            approval_required = True
-
-
-        elif state.operation_mode == ASK_BEFORE_ACTION_MODE:
-
-            if risk_level == "MEDIUM":
-                approval_required = True
-
-
-        elif state.operation_mode == AUTONOMOUS_MODE:
-
-            approval_required = False
-
-
-        else:
-
-            raise ValueError(
-                f"Unsupported operation mode: "
-                f"{state.operation_mode}"
-            )
-
-
-        # IMPORTANT FIX:
-        # Approved actions from dashboard bypass approval
-
-        if approval_required and not approved:
+        if decision.requires_approval:
 
             state.record_failure(
                 {
                     "action_type": "COMPRESS",
                     "path": str(file_path),
-                    "risk_level": risk_level,
+                    "risk_level": decision.risk_level,
                     "operation_mode": state.operation_mode,
                     "status": "APPROVAL_REQUIRED",
-                    "error":
-                        "This action requires explicit user approval in the current operation mode.",
+                    "error": decision.reason,
                 }
             )
 
             return state
-
 
 
         # ---------------------------------------------
@@ -173,29 +149,13 @@ def execute_compression(
 
 
         # ---------------------------------------------
-        # VERIFY COMPRESSION
+        # VERIFY COMPRESSION (hash-based, streaming)
         # ---------------------------------------------
 
-        with gzip.open(
-            compressed,
-            "rb",
-        ) as compressed_file:
+        original_hash = calculate_hash(str(file_path))
+        compressed_content_hash = _hash_of_gzip_contents(compressed)
 
-            compressed_data = (
-                compressed_file.read()
-            )
-
-
-        with file_path.open(
-            "rb"
-        ) as original_file:
-
-            original_data = (
-                original_file.read()
-            )
-
-
-        if compressed_data != original_data:
+        if compressed_content_hash != original_hash:
 
             raise RuntimeError(
                 "Verification failed: "
@@ -254,7 +214,7 @@ def execute_compression(
                 "output_path": str(compressed),
                 "quarantine_path": str(quarantine),
 
-                "risk_level": risk_level,
+                "risk_level": decision.risk_level,
 
                 "operation_mode":
                     state.operation_mode,

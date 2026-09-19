@@ -20,6 +20,37 @@ def assess_file_risk(file_info: dict) -> str:
     if name in protected_names:
         return "HIGH"
 
+    # Files that commonly carry secrets/credentials must never be
+    # treated as ordinary MEDIUM-risk files. This closes a gap where
+    # such files fell through to the MEDIUM default below and could be
+    # auto-actioned in AUTONOMOUS mode.
+    sensitive_names = {
+        ".env",
+        ".env.local",
+        ".env.production",
+        ".env.development",
+        ".npmrc",
+        ".netrc",
+        ".pgpass",
+        "id_rsa",
+        "id_ed25519",
+        "credentials",
+        "credentials.json",
+        "secrets.json",
+        "secrets.yaml",
+        "secrets.yml",
+    }
+
+    sensitive_prefixes = (".env.",)
+    sensitive_extensions = {".pem", ".key", ".pfx", ".p12", ".kdbx"}
+
+    if (
+        name in sensitive_names
+        or name.startswith(sensitive_prefixes)
+        or suffix in sensitive_extensions
+    ):
+        return "HIGH"
+
     # Configuration and executable files deserve extra caution.
     high_risk_extensions = {
         ".exe",

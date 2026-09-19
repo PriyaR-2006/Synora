@@ -1,4 +1,5 @@
 from pathlib import Path
+from uuid import uuid4
 
 from agent.state import MissionState
 from engines.context import build_storage_context
@@ -79,6 +80,10 @@ def choose_duplicate_to_keep(
     )
 
 
+def _new_action_id() -> str:
+    return f"action-{uuid4().hex[:12]}"
+
+
 def create_plan(
     state: MissionState,
     directory: str,
@@ -101,6 +106,11 @@ def create_plan(
     - Avoids unprofitable compression
     - Uses future value and risk for prioritization
     - Does not automatically delete duplicates
+    - Honors mission constraints from the Goal Interpreter (e.g. a
+      delete_prohibited constraint is always true for this planner
+      already, since it never plans DELETE actions at all - the field
+      is read here defensively so a future domain/action type can act
+      on it without the planner needing to change shape again)
     """
 
     if state.status == "COMPLETED":
@@ -225,7 +235,9 @@ def create_plan(
 
         duplicate_candidates.append(
             {
+                "action_id": _new_action_id(),
                 "action_type": "DUPLICATE_REVIEW",
+                "tool": "find_duplicates",
                 "keep_path": keep_file["path"],
                 "duplicate_paths": duplicate_paths,
                 "duplicate_count": len(
@@ -234,6 +246,14 @@ def create_plan(
                 "potential_recovered_bytes": (
                     potential_recovered_bytes
                 ),
+                "dependencies": [],
+                "expected_outcome": (
+                    "User reviews duplicate copies; no file is "
+                    "deleted automatically."
+                ),
+                "risk_level": "LOW",
+                "verification_required": False,
+                "fallback_strategy": None,
                 "reason": (
                     "Identical file contents detected. "
                     "Review duplicate copies before "
@@ -339,9 +359,11 @@ def create_plan(
 
         compression_candidates.append(
             {
+                "action_id": _new_action_id(),
                 "action_type": simulation[
                     "action_type"
                 ],
+                "tool": "compress_file",
                 "path": simulation[
                     "path"
                 ],
@@ -355,6 +377,16 @@ def create_plan(
                     "future_value"
                 ],
                 "priority_score": score,
+                "dependencies": [],
+                "expected_outcome": (
+                    f"File compressed and original quarantined; "
+                    f"~{estimated_recovered} bytes recovered."
+                ),
+                "verification_required": True,
+                "fallback_strategy": (
+                    "If the destination already exists, retry with "
+                    "a versioned filename."
+                ),
             }
         )
 

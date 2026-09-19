@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from dataclasses import asdict
 from uuid import uuid4
 
@@ -13,7 +16,10 @@ from agent.state import (
     AUTONOMOUS_MODE,
     MissionState,
 )
-from storage.database import save_mission, load_mission
+from domains import router as domain_router
+from memory import history as mission_history
+from memory.history import get_mission_history, summarize_mission_history
+from storage.database import save_mission, load_mission, list_missions
 
 from tools.scanner import scan_directory
 from tools.duplicates import find_duplicates
@@ -263,7 +269,7 @@ def verify(
 
 
 # ---------------------------------------------------------
-# LEGACY / DASHBOARD MISSION API
+# LEGACY / DASHBOARD MISSION API (kept for the current frontend)
 # ---------------------------------------------------------
 
 @app.post("/mission")
@@ -337,7 +343,7 @@ def get_mission():
 
 
 # ---------------------------------------------------------
-# MISSION APPROVAL / RESUME
+# MISSION APPROVAL / RESUME (legacy, kept for current frontend)
 # ---------------------------------------------------------
 
 @app.post("/mission/approve")
@@ -346,7 +352,12 @@ def approve_mission(
     directory: str = "demo_data/demo_drive",
     max_cycles: int = 10,
 ):
-    mission = load_mission()
+    mission = load_mission(mission_id=mission_id)
+
+    if mission is None:
+        # Fall back to "most recent mission" for old clients that never
+        # pass a mission_id that this store recognizes as a key.
+        mission = load_mission()
 
     if mission is None:
         raise HTTPException(
@@ -379,10 +390,6 @@ def approve_mission(
 
         approved = state.approve_pending_action()
 
-        print("APPROVED ACTION:", approved)
-        print("PLANNED ACTIONS:", state.planned_actions)
-        print("STATUS:", state.status)
-
         if not approved:
             raise HTTPException(
                 status_code=400,
@@ -390,6 +397,8 @@ def approve_mission(
                     "No pending action requires approval."
                 ),
             )
+
+        mission_history.record_approval_granted(state.mission_id, approved)
 
         save_mission(asdict(state))
 
@@ -426,7 +435,7 @@ def approve_mission(
 
 
 # ---------------------------------------------------------
-# NEW MISSION API
+# NEW MISSION API (mission-ID-aware)
 # ---------------------------------------------------------
 
 @app.post("/missions")
@@ -512,3 +521,180 @@ def get_latest_mission():
         )
 
     return state
+
+
+@app.get("/missions")
+def get_all_missions():
+    return {"missions": list_missions()}
+
+
+@app.get("/missions/{mission_id}")
+def get_mission_by_id(mission_id: str):
+    state = load_mission(mission_id=mission_id)
+
+    if state is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Mission '{mission_id}' not found.",
+        )
+
+    return state
+
+
+@app.post("/missions/{mission_id}/run")
+def continue_mission(mission_id: str, directory: str = "demo_data/demo_drive", max_cycles: int = 10):
+    mission = load_mission(mission_id=mission_id)
+
+    if mission is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Mission '{mission_id}' not found.",
+        )
+
+    try:
+        state = MissionState(**mission)
+
+        state = execute_mission(
+            state,
+            directory,
+            max_cycles=max_cycles,
+        )
+
+        save_mission(asdict(state))
+
+        return asdict(state)
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=str(error),
+        )
+
+
+@app.post("/missions/{mission_id}/approve")
+def approve_mission_by_id(mission_id: str, directory: str = "demo_data/demo_drive", max_cycles: int = 10):
+    mission = load_mission(mission_id=mission_id)
+
+    if mission is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Mission '{mission_id}' not found.",
+        )
+
+    try:
+        state = MissionState(**mission)
+
+        if state.status != "WAITING_FOR_APPROVAL":
+            raise HTTPException(
+                status_code=400,
+                detail="Mission is not waiting for approval.",
+            )
+
+        approved = state.approve_pending_action()
+
+        if not approved:
+            raise HTTPException(
+                status_code=400,
+                detail="No pending action requires approval.",
+            )
+
+        mission_history.record_approval_granted(state.mission_id, approved)
+
+        save_mission(asdict(state))
+
+        final_state = execute_mission(
+            state,
+            directory,
+            max_cycles=max_cycles,
+        )
+
+        save_mission(asdict(final_state))
+
+        return asdict(final_state)
+
+    except HTTPException:
+        raise
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=str(error),
+        )
+
+
+@app.get("/missions/{mission_id}/plan")
+def get_mission_plan(mission_id: str):
+    state = load_mission(mission_id=mission_id)
+
+    if state is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Mission '{mission_id}' not found.",
+        )
+
+    return {
+        "mission_id": mission_id,
+        "planned_actions": state.get("planned_actions", []),
+        "completed_actions": state.get("completed_actions", []),
+        "failed_actions": state.get("failed_actions", []),
+    }
+
+
+@app.get("/missions/{mission_id}/verification")
+def get_mission_verification(mission_id: str):
+    state = load_mission(mission_id=mission_id)
+
+    if state is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Mission '{mission_id}' not found.",
+        )
+
+    return {
+        "mission_id": mission_id,
+        "verification_results": state.get("verification_results", []),
+    }
+
+
+@app.get("/missions/{mission_id}/history")
+def get_mission_history_endpoint(mission_id: str):
+    return {
+        "mission_id": mission_id,
+        "history": get_mission_history(mission_id),
+        "summary": summarize_mission_history(mission_id),
+    }
+
+
+# ---------------------------------------------------------
+# DOMAINS
+# ---------------------------------------------------------
+
+@app.get("/domains")
+def get_domains():
+    return {"domains": domain_router.list_all_capabilities()}
+
+
+@app.get("/domains/{domain_name}")
+def get_domain(domain_name: str):
+    try:
+        return domain_router.get_capabilities(domain_name.upper())
+    except domain_router.UnknownDomainError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+
+
+# ---------------------------------------------------------
+# WORKSPACE (read-only inspection, no mission started)
+# ---------------------------------------------------------
+
+@app.get("/workspace/inspect")
+def inspect_workspace(directory: str):
+    try:
+        from domains.file import domain as file_domain
+
+        return file_domain.inspect_workspace(directory)
+
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+
+    except NotADirectoryError as error:
+        raise HTTPException(status_code=400, detail=str(error))

@@ -1,10 +1,12 @@
-
 from dataclasses import asdict
 
 from agent.state import MissionState
 from agent.planner import create_plan
 from agent.executor import execute_compression
+from agent.replanner import propose_alternative
+from memory import history
 from storage.database import save_mission
+from verification.verifier import verify_compression_action
 
 
 def run_mission(
@@ -37,6 +39,13 @@ def run_mission(
         save_mission(asdict(state))
         return state
 
+
+    if state.status == "CREATED":
+        history.record_mission_created(
+            state.mission_id,
+            state.user_goal,
+            state.target_storage_bytes,
+        )
 
     state.status = "RUNNING"
 
@@ -92,6 +101,16 @@ def run_mission(
             if action.get("approved") is True
         ]
 
+        # If the replanner proposed a specific alternative action
+        # ahead of this planning pass, preserve it the same way an
+        # approved action is preserved, so create_plan()'s clear()
+        # does not discard it.
+        replanner_actions = [
+            action
+            for action in state.planned_actions
+            if action.get("from_replanner") is True
+        ]
+
         state = create_plan(
             state,
             directory,
@@ -110,6 +129,20 @@ def run_mission(
             ]
 
             state.planned_actions[0:0] = approved_actions
+
+        if replanner_actions:
+            replanner_paths = {
+                action.get("path")
+                for action in replanner_actions
+            }
+
+            state.planned_actions = [
+                action
+                for action in state.planned_actions
+                if action.get("path") not in replanner_paths
+            ]
+
+            state.planned_actions[0:0] = replanner_actions
 
 
         # FIX:
@@ -168,12 +201,60 @@ def run_mission(
 
         if action["action_type"] == "COMPRESS":
 
+            actions_before = len(state.completed_actions)
+            failures_before = len(state.failed_actions)
+
             state = execute_compression(
                 state,
                 action,
                 compressed_directory,
                 approved=action.get("approved", False),
             )
+
+            if len(state.completed_actions) > actions_before:
+                history.record_action_completed(
+                    state.mission_id,
+                    state.completed_actions[-1],
+                )
+            elif len(state.failed_actions) > failures_before:
+                last_failure = state.failed_actions[-1]
+
+                if last_failure.get("status") == "APPROVAL_REQUIRED":
+                    history.record_approval_requested(
+                        state.mission_id,
+                        last_failure,
+                    )
+                else:
+                    history.record_action_failed(
+                        state.mission_id,
+                        last_failure,
+                    )
+
+            # ---------------------------------------------
+            # GOAL-LEVEL VERIFICATION (additive, observational)
+            # ---------------------------------------------
+
+            if len(state.completed_actions) > actions_before:
+                last_action = state.completed_actions[-1]
+
+                verification_result = verify_compression_action(
+                    last_action
+                )
+
+                state.record_verification(
+                    {
+                        "action_id": last_action.get("action_id"),
+                        "path": last_action.get("path"),
+                        "result": verification_result.result,
+                        "checks": verification_result.checks,
+                        "message": verification_result.message,
+                    }
+                )
+
+                history.record_verification(
+                    state.mission_id,
+                    state.verification_results[-1],
+                )
 
 
         elif action["action_type"] == "DUPLICATE_REVIEW":
@@ -273,8 +354,38 @@ def run_mission(
 
         if state.status == "REPLANNING":
 
-            continue
+            # Give the replanner a chance to propose a specific
+            # alternative for the most recent failure before falling
+            # back to a blind full re-plan next cycle. If it has
+            # nothing to offer, this is a no-op and behaviour is
+            # identical to the original "clear and re-plan" flow.
+            if state.failed_actions:
+                last_failure = state.failed_actions[-1]
 
+                alternative = propose_alternative(
+                    state,
+                    last_failure,
+                    directory,
+                )
+
+                if alternative is not None:
+                    alternative["from_replanner"] = True
+                    state.planned_actions.insert(0, alternative)
+
+                    state.record_replan(
+                        {
+                            "original_action": last_failure,
+                            "alternative_action": alternative,
+                        }
+                    )
+
+                    history.record_replan(
+                        state.mission_id,
+                        last_failure,
+                        alternative,
+                    )
+
+            continue
 
 
     return state
