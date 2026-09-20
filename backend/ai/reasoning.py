@@ -1,9 +1,52 @@
+"""
+Synora Goal Interpreter.
+
+Converts a natural-language storage-management request into a
+structured goal dict. The LLM (when available) interprets; it never
+touches the filesystem directly - agent/planner.py and agent/executor.py
+remain the only code paths that perform real file operations. The LLM
+is used ONLY here, for this one translation step - it never appears in
+planning, risk assessment, execution, verification, or replanning,
+which all remain deterministic Python.
+
+Provider handling (in priority order):
+    1. GROQ_API_KEY set     -> Groq (free tier, OpenAI-compatible API)
+    2. ANTHROPIC_API_KEY set -> Anthropic (Claude)
+    3. OPENAI_API_KEY set    -> OpenAI
+    4. none available, or every configured provider's call fails
+       (missing package, network error, bad JSON, schema mismatch,
+       rate limit, etc.) -> deterministic regex/keyword fallback
+
+Groq is checked first because it is the intended default free provider
+for this project. Anthropic/OpenAI remain as optional secondary
+providers for anyone who has those keys instead. The fallback is not a
+stub that throws - it always produces a real, usable structured goal,
+so the system is fully runnable with zero API keys configured.
+
+Output schema (superset of the original {goal, target_storage_bytes,
+constraints, strategy} shape - "constraints" is now a *list* under the
+raw LLM contract but understand_goal() normalizes it into the richer
+dict shape MissionState.constraints expects):
+
+{
+    "goal": str,
+    "target_storage_bytes": int,
+    "constraints": {
+        "delete_prohibited": bool,
+        "protect_sensitive_data": bool,
+        "workspace": str | None,
+        "approval_required_for": list[str],
+    },
+    "strategy": str,
+}
+"""
+
 import json
 import os
 import re
 from typing import Any, Optional
 
-
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-5"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 
@@ -155,6 +198,24 @@ def _fallback_interpret(user_request: str) -> dict[str, Any]:
 # LLM call paths
 # ---------------------------------------------------------------------------
 
+def _call_groq(user_request: str, model: str) -> str:
+    from groq import Groq
+
+    client = Groq()
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_request},
+        ],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+
+    return response.choices[0].message.content.strip()
+
+
 def _call_anthropic(user_request: str, model: str) -> str:
     import anthropic
 
@@ -254,6 +315,26 @@ def _normalize_llm_result(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _try_provider(
+    call_fn,
+    user_request: str,
+    model: str,
+) -> Optional[dict[str, Any]]:
+    """
+    Call one provider and normalize/validate its response. Returns None
+    on ANY failure (missing package, no/invalid key, network error,
+    rate limit, malformed JSON, schema mismatch) rather than raising, so
+    understand_goal() can move on to the next provider or the
+    deterministic fallback without special-casing each failure mode.
+    """
+
+    try:
+        raw_text = call_fn(user_request, model)
+        return _normalize_llm_result(json.loads(_strip_code_fences(raw_text)))
+    except Exception:
+        return None
+
+
 def understand_goal(
     user_request: str,
     model: Optional[str] = None,
@@ -262,50 +343,41 @@ def understand_goal(
     Convert a natural-language storage request into a structured Synora
     mission description.
 
-    Provider selection:
-        - ANTHROPIC_API_KEY set -> uses Anthropic (Claude).
-        - else OPENAI_API_KEY set -> uses OpenAI.
-        - else, or on any error from either provider -> falls back to
-          the deterministic keyword-based interpreter.
+    Provider selection, in order:
+        1. GROQ_API_KEY set      -> Groq (free tier, primary provider)
+        2. ANTHROPIC_API_KEY set -> Anthropic (Claude)
+        3. OPENAI_API_KEY set    -> OpenAI
+        4. none configured, or every configured provider's call fails
+           -> deterministic keyword-based fallback
 
-    This function never raises for a merely-unavailable LLM; it only
-    raises GoalInterpretationError for a genuinely empty request, or if
-    a returned LLM response fails schema validation and the fallback
-    itself is somehow inapplicable (which in practice never happens,
-    since the fallback only requires a non-empty string).
+    This function never raises for a merely-unavailable or failing LLM;
+    it only raises GoalInterpretationError for a genuinely empty
+    request. The fallback always succeeds on any non-empty string, so a
+    usable structured goal is guaranteed either way.
     """
 
     if not user_request or not user_request.strip():
         raise GoalInterpretationError("User request cannot be empty.")
 
-    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-    openai_key = os.getenv("OPENAI_API_KEY")
+    if os.getenv("GROQ_API_KEY"):
+        result = _try_provider(
+            _call_groq, user_request, model or DEFAULT_GROQ_MODEL
+        )
+        if result is not None:
+            return result
 
-    if anthropic_key:
-        try:
-            raw_text = _call_anthropic(
-                user_request,
-                model or DEFAULT_ANTHROPIC_MODEL,
-            )
-            return _normalize_llm_result(
-                json.loads(_strip_code_fences(raw_text))
-            )
-        except Exception:
-            # Any failure (missing package, network error, bad JSON,
-            # schema mismatch) falls through to OpenAI, then to the
-            # deterministic fallback below.
-            pass
+    if os.getenv("ANTHROPIC_API_KEY"):
+        result = _try_provider(
+            _call_anthropic, user_request, model or DEFAULT_ANTHROPIC_MODEL
+        )
+        if result is not None:
+            return result
 
-    if openai_key:
-        try:
-            raw_text = _call_openai(
-                user_request,
-                model or DEFAULT_OPENAI_MODEL,
-            )
-            return _normalize_llm_result(
-                json.loads(_strip_code_fences(raw_text))
-            )
-        except Exception:
-            pass
+    if os.getenv("OPENAI_API_KEY"):
+        result = _try_provider(
+            _call_openai, user_request, model or DEFAULT_OPENAI_MODEL
+        )
+        if result is not None:
+            return result
 
     return _fallback_interpret(user_request)

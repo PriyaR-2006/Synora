@@ -1,0 +1,19 @@
+# Core API
+fastapi
+uvicorn
+pydantic
+
+# Testing
+pytest
+httpx
+
+# Environment variables
+python-dotenv
+
+# LLM providers for the Goal Interpreter (ai/reasoning.py).
+# None are required for Synora to run - if no key is configured, or a
+# configured provider's call fails, the deterministic fallback in
+# ai/reasoning.py is used automatically.
+groq       # primary provider (free tier)
+anthropic  # optional secondary provider
+openai     # optional secondary provider
