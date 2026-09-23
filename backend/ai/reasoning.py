@@ -10,35 +10,16 @@ planning, risk assessment, execution, verification, or replanning,
 which all remain deterministic Python.
 
 Provider handling (in priority order):
-    1. GROQ_API_KEY set     -> Groq (free tier, OpenAI-compatible API)
-    2. ANTHROPIC_API_KEY set -> Anthropic (Claude)
-    3. OPENAI_API_KEY set    -> OpenAI
-    4. none available, or every configured provider's call fails
+    1. GROK_API_KEY set      -> Grok (xAI via OpenAI-compatible endpoint)
+    2. GROQ_API_KEY set      -> Groq (Llama/Mixtral free tier)
+    3. ANTHROPIC_API_KEY set -> Anthropic (Claude)
+    4. OPENAI_API_KEY set    -> OpenAI
+    5. none available, or every configured provider's call fails
        (missing package, network error, bad JSON, schema mismatch,
-       rate limit, etc.) -> deterministic regex/keyword fallback
+       rate limit / 429, etc.) -> deterministic regex/keyword fallback
 
-Groq is checked first because it is the intended default free provider
-for this project. Anthropic/OpenAI remain as optional secondary
-providers for anyone who has those keys instead. The fallback is not a
-stub that throws - it always produces a real, usable structured goal,
-so the system is fully runnable with zero API keys configured.
-
-Output schema (superset of the original {goal, target_storage_bytes,
-constraints, strategy} shape - "constraints" is now a *list* under the
-raw LLM contract but understand_goal() normalizes it into the richer
-dict shape MissionState.constraints expects):
-
-{
-    "goal": str,
-    "target_storage_bytes": int,
-    "constraints": {
-        "delete_prohibited": bool,
-        "protect_sensitive_data": bool,
-        "workspace": str | None,
-        "approval_required_for": list[str],
-    },
-    "strategy": str,
-}
+The fallback is not a stub that throws - it always produces a real, usable
+structured goal, so the system is fully runnable with zero API keys configured.
 """
 
 import json
@@ -46,10 +27,16 @@ import os
 import re
 from typing import Any, Optional
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+DEFAULT_GROK_MODEL = "grok-beta"
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-5"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
-
 
 SYSTEM_PROMPT = """
 You are the Goal Interpreter of Synora, an autonomous digital steward for
@@ -89,7 +76,6 @@ Rules:
 8. Do not include markdown, comments, or any text outside the JSON object.
 """
 
-
 REQUIRED_TOP_LEVEL_FIELDS = {
     "goal",
     "target_storage_bytes",
@@ -112,8 +98,7 @@ class GoalInterpretationError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Unit conversion helpers (shared by both the LLM-normalization path and
-# the deterministic fallback).
+# Unit conversion helpers
 # ---------------------------------------------------------------------------
 
 _UNIT_MULTIPLIERS = {
@@ -134,13 +119,11 @@ _SIZE_PATTERN = re.compile(
 
 def _extract_target_bytes(text: str) -> int:
     match = _SIZE_PATTERN.search(text)
-
     if not match:
         return 0
 
     value = float(match.group("value"))
     unit = match.group("unit").lower()
-
     multiplier = _UNIT_MULTIPLIERS.get(unit, 1)
 
     return int(value * multiplier)
@@ -149,12 +132,9 @@ def _extract_target_bytes(text: str) -> int:
 def _fallback_interpret(user_request: str) -> dict[str, Any]:
     """
     Deterministic, dependency-free interpreter used whenever no LLM
-    provider is configured or the LLM call fails. Keyword/regex based,
-    intentionally conservative (defaults to the safest constraints).
+    provider is configured or all LLM calls fail. Keyword/regex based.
     """
-
     lowered = user_request.lower()
-
     target_bytes = _extract_target_bytes(user_request)
 
     delete_prohibited = True
@@ -197,6 +177,28 @@ def _fallback_interpret(user_request: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # LLM call paths
 # ---------------------------------------------------------------------------
+
+def _call_grok(user_request: str, model: str) -> str:
+    """Calls xAI (Grok) using the OpenAI-compatible endpoint."""
+    from openai import OpenAI
+
+    api_key = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")
+    base_url = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
+
+    client = OpenAI(api_key=api_key, base_url=base_url)
+
+    response = client.chat.completions.create(
+        model=model or os.getenv("GROK_MODEL", DEFAULT_GROK_MODEL),
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_request},
+        ],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+
+    return response.choices[0].message.content.strip()
+
 
 def _call_groq(user_request: str, model: str) -> str:
     from groq import Groq
@@ -248,6 +250,8 @@ def _call_openai(user_request: str, model: str) -> str:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_request},
         ],
+        temperature=0,
+        response_format={"type": "json_object"},
     )
 
     return response.choices[0].message.content.strip()
@@ -265,51 +269,34 @@ def _strip_code_fences(text: str) -> str:
 
 def _normalize_llm_result(raw: dict[str, Any]) -> dict[str, Any]:
     missing = REQUIRED_TOP_LEVEL_FIELDS - raw.keys()
-
     if missing:
-        raise GoalInterpretationError(
-            f"LLM response is missing fields: {missing}"
-        )
+        raise GoalInterpretationError(f"LLM response is missing fields: {missing}")
 
     if not isinstance(raw["target_storage_bytes"], int):
-        raise GoalInterpretationError(
-            "target_storage_bytes must be an integer."
-        )
+        raise GoalInterpretationError("target_storage_bytes must be an integer.")
 
     if raw["target_storage_bytes"] < 0:
-        raise GoalInterpretationError(
-            "target_storage_bytes cannot be negative."
-        )
+        raise GoalInterpretationError("target_storage_bytes cannot be negative.")
 
     constraints = raw.get("constraints")
-
     if not isinstance(constraints, dict):
         raise GoalInterpretationError("constraints must be an object.")
 
     missing_constraints = REQUIRED_CONSTRAINT_FIELDS - constraints.keys()
-
     if missing_constraints:
-        raise GoalInterpretationError(
-            f"constraints is missing fields: {missing_constraints}"
-        )
+        raise GoalInterpretationError(f"constraints is missing fields: {missing_constraints}")
 
     if not isinstance(constraints["approval_required_for"], list):
-        raise GoalInterpretationError(
-            "constraints.approval_required_for must be a list."
-        )
+        raise GoalInterpretationError("constraints.approval_required_for must be a list.")
 
     return {
         "goal": str(raw["goal"]),
         "target_storage_bytes": int(raw["target_storage_bytes"]),
         "constraints": {
             "delete_prohibited": bool(constraints["delete_prohibited"]),
-            "protect_sensitive_data": bool(
-                constraints["protect_sensitive_data"]
-            ),
+            "protect_sensitive_data": bool(constraints["protect_sensitive_data"]),
             "workspace": constraints.get("workspace"),
-            "approval_required_for": list(
-                constraints["approval_required_for"]
-            ),
+            "approval_required_for": list(constraints["approval_required_for"]),
         },
         "strategy": str(raw.get("strategy", "")),
     }
@@ -320,18 +307,11 @@ def _try_provider(
     user_request: str,
     model: str,
 ) -> Optional[dict[str, Any]]:
-    """
-    Call one provider and normalize/validate its response. Returns None
-    on ANY failure (missing package, no/invalid key, network error,
-    rate limit, malformed JSON, schema mismatch) rather than raising, so
-    understand_goal() can move on to the next provider or the
-    deterministic fallback without special-casing each failure mode.
-    """
-
     try:
         raw_text = call_fn(user_request, model)
         return _normalize_llm_result(json.loads(_strip_code_fences(raw_text)))
-    except Exception:
+    except Exception as e:
+        # Catches RateLimitError (429), ModuleNotFoundError, bad JSON, network drops, etc.
         return None
 
 
@@ -344,40 +324,38 @@ def understand_goal(
     mission description.
 
     Provider selection, in order:
-        1. GROQ_API_KEY set      -> Groq (free tier, primary provider)
-        2. ANTHROPIC_API_KEY set -> Anthropic (Claude)
-        3. OPENAI_API_KEY set    -> OpenAI
-        4. none configured, or every configured provider's call fails
-           -> deterministic keyword-based fallback
-
-    This function never raises for a merely-unavailable or failing LLM;
-    it only raises GoalInterpretationError for a genuinely empty
-    request. The fallback always succeeds on any non-empty string, so a
-    usable structured goal is guaranteed either way.
+        1. GROK_API_KEY / XAI_API_KEY -> Grok (xAI)
+        2. GROQ_API_KEY               -> Groq
+        3. ANTHROPIC_API_KEY          -> Anthropic (Claude)
+        4. OPENAI_API_KEY             -> OpenAI
+        5. none configured or all fail -> deterministic fallback
     """
-
     if not user_request or not user_request.strip():
         raise GoalInterpretationError("User request cannot be empty.")
 
+    # 1. Try Grok (xAI)
+    if os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY"):
+        result = _try_provider(_call_grok, user_request, model or DEFAULT_GROK_MODEL)
+        if result is not None:
+            return result
+
+    # 2. Try Groq
     if os.getenv("GROQ_API_KEY"):
-        result = _try_provider(
-            _call_groq, user_request, model or DEFAULT_GROQ_MODEL
-        )
+        result = _try_provider(_call_groq, user_request, model or DEFAULT_GROQ_MODEL)
         if result is not None:
             return result
 
+    # 3. Try Anthropic
     if os.getenv("ANTHROPIC_API_KEY"):
-        result = _try_provider(
-            _call_anthropic, user_request, model or DEFAULT_ANTHROPIC_MODEL
-        )
+        result = _try_provider(_call_anthropic, user_request, model or DEFAULT_ANTHROPIC_MODEL)
         if result is not None:
             return result
 
+    # 4. Try OpenAI
     if os.getenv("OPENAI_API_KEY"):
-        result = _try_provider(
-            _call_openai, user_request, model or DEFAULT_OPENAI_MODEL
-        )
+        result = _try_provider(_call_openai, user_request, model or DEFAULT_OPENAI_MODEL)
         if result is not None:
             return result
 
+    # 5. Deterministic keyword/regex fallback (guaranteed to succeed)
     return _fallback_interpret(user_request)

@@ -3,7 +3,8 @@ from agent.controller import run_mission
 
 
 def main():
-    directory = "demo_data/demo_drive"
+    # Point to the folder that has active files waiting for actions
+    directory = "demo_data/big_test_drive"
 
     state = MissionState(
         mission_id="mission-001",
