@@ -1,43 +1,59 @@
-# Synora 
+<div align="center">
 
-**An Autonomous Digital Steward for Goal-Driven and Future-Aware File Management**
+# 🧭 Synora — FilePilot
 
-Synora (codename **FilePilot**) is an agentic file-management system. Instead of running fixed rules on your files, it takes a plain-language goal ("free up 5GB", "archive anything untouched in 6 months", "find and remove duplicate photos"), reasons about the safest way to do it, and executes the plan through a sandboxed, verifiable controller — reporting back what changed and why.
+### An Autonomous Digital Steward for Goal-Driven and Future-Aware File Management
 
----
+*Tell it what you want. It figures out how to get there — safely.*
 
-## Why FilePilot
+[![Frontend](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-61DAFB?style=for-the-badge&logo=react&logoColor=black)](#)
+[![Backend](https://img.shields.io/badge/Backend-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](#)
+[![AI Core](https://img.shields.io/badge/AI%20Core-Grok%20%2F%20OpenAI-8A2BE2?style=for-the-badge)](#)
+[![Status](https://img.shields.io/badge/Status-In%20Development-orange?style=for-the-badge)](#)
 
-Traditional cleanup tools apply static rules (delete files older than X days, compress folder Y). FilePilot instead:
-
-- **Interprets intent** — turns a natural-language goal into a structured plan
-- **Assesses risk before acting** — every file touched is scored before any action is taken
-- **Plans and adapts** — drafts a sequence of safe actions, then re-plans if verification shows the goal wasn't met
-- **Verifies its own work** — every operation is hash-checked before and after, so nothing is silently corrupted or lost
+</div>
 
 ---
 
-## Architecture
+## ✨ What is FilePilot?
 
-FilePilot is organized into five layers, from UI down to storage.
+Most cleanup tools are dumb rule-runners: *delete anything older than 90 days*, *zip this folder*. FilePilot is different — it's an **agent**, not a script.
+
+Give it a goal in plain English:
+
+> 🗣️ *"Free up 5GB without touching anything I've opened this month"*
+> 🗣️ *"Archive whatever's been untouched for 6+ months"*
+> 🗣️ *"Find and clear out duplicate photos"*
+
+...and it **interprets the intent, scores the risk, drafts a plan, executes it inside a sandbox, and verifies every single change** — before reporting back exactly what happened and why.
+
+| 🎯 Goal-driven | 🛡️ Risk-aware | 🔁 Self-correcting | ✅ Verifiable |
+|:---:|:---:|:---:|:---:|
+| Natural language in, structured plan out | Every file scored before it's touched | Replans automatically if a goal isn't met | SHA-256 hash-checked pre/post every action |
+
+---
+
+## 🏗️ Architecture
+
+FilePilot is built as **five layers**, from the UI you click down to the bytes on disk.
 
 ```
 ==========================================================================================
-1. PRESENTATION LAYER (Frontend)
+🖥️  1. PRESENTATION LAYER (Frontend)
    Tech: React + Vite
    Components: [ Mission Control ]  |  [ Workspace Dashboard ]  |  [ Audit History ]
 ==========================================================================================
                                        │
                                        ▼  REST API (JSON)
 ==========================================================================================
-2. API & ROUTING LAYER (Backend Gateway)
+🔌  2. API & ROUTING LAYER (Backend Gateway)
    Tech: Python + FastAPI
    Components: [ Endpoints: /mission, /scan, /duplicates ]  |  [ State Management ]
 ==========================================================================================
                                        │
                                        ▼  Goal & Context
 ==========================================================================================
-3. AGENTIC AI CORE (The Deliberation Engine)
+🧠  3. AGENTIC AI CORE (The Deliberation Engine)
    Tech: Grok (xAI) / OpenAI + Python
 
    ┌──────────────────────┐      ┌──────────────────────┐      ┌──────────────────────┐
@@ -55,7 +71,7 @@ FilePilot is organized into five layers, from UI down to storage.
                                        │
                                        ▼  Approved Action Plan
 ==========================================================================================
-4. EXECUTION & PERCEPTION (The Controller)
+⚙️  4. EXECUTION & PERCEPTION (The Controller)
    Tech: Python Filesystem APIs (os, shutil, hashlib)
 
    [ SCANNER ] ──────────────> [ EXECUTOR ] ──────────────> [ VERIFIER ]
@@ -66,74 +82,86 @@ FilePilot is organized into five layers, from UI down to storage.
                                        │
                                        ▼  I/O Operations
 ==========================================================================================
-5. DATA & INFRASTRUCTURE LAYER
+🗄️  5. DATA & INFRASTRUCTURE LAYER
    [ Active Files ]      [ Compressed (.gz) ]      [ Quarantine Zone ]      [ Restored ]
 ==========================================================================================
 ```
 
-### Layer breakdown
+### 🔍 Layer by layer
 
-| Layer | Responsibility |
+| Layer | What it does |
 |---|---|
-| **1. Presentation** | React + Vite frontend. Mission Control for setting goals, a Workspace Dashboard for live state, and Audit History for reviewing past runs. |
-| **2. API & Routing** | FastAPI gateway exposing `/mission`, `/scan`, and `/duplicates`, plus session/state management between frontend and the AI core. |
-| **3. Agentic AI Core** | The deliberation engine. A goal interpreter parses natural language into structured JSON, a risk engine scores every candidate file/action, a planner sequences safe operations, and a replanner loops back in if post-execution verification shows the goal wasn't achieved. |
-| **4. Execution & Perception** | The controller: a Scanner maps the workspace and hashes files (SHA-256), an Executor runs sandboxed actions (compress, quarantine, deduplicate, restore), and a Verifier re-hashes to confirm integrity pre/post operation. |
-| **5. Data & Infrastructure** | Where files actually live day to day — Active Files, Compressed archives (`.gz`), a Quarantine Zone for at-risk items pending review, and Restored files brought back from quarantine or archive. |
+| 🖥️ **1. Presentation** | React + Vite frontend — Mission Control for setting goals, a live Workspace Dashboard, and Audit History for past runs. |
+| 🔌 **2. API & Routing** | FastAPI gateway exposing `/mission`, `/scan`, `/duplicates`, plus session/state handling between UI and AI core. |
+| 🧠 **3. Agentic AI Core** | The brains: goal interpreter → risk engine → planner, with a replanner that loops back in if verification says the goal wasn't met. |
+| ⚙️ **4. Execution & Perception** | The hands: Scanner maps and hashes the workspace, Executor runs sandboxed actions, Verifier re-hashes to confirm nothing broke. |
+| 🗄️ **5. Data & Infrastructure** | Where files live — Active, Compressed (`.gz`), Quarantine (pending review), and Restored. |
 
 ---
 
-## Project structure
+## 📁 Project structure
 
 ```
 Synora/
-├── backend/        # FastAPI gateway + agentic core + execution controller
-├── frontend/        # React + Vite client (Mission Control, Dashboard, Audit History)
-├── docs/             # Project documentation
-├── .env.example      # Environment variable template
+├── backend/        🔌 FastAPI gateway + agentic core + execution controller
+├── frontend/        🖥️ React + Vite client (Mission Control, Dashboard, Audit History)
+├── docs/             📚 Project documentation
+├── .env.example      🔑 Environment variable template
 └── .gitignore
 ```
 
-## Safety model
+## 🛡️ Safety model
 
-- **Nothing is deleted outright** — risky actions route through quarantine first, with restore available.
-- **Every operation is hash-verified** before and after execution.
-- **The AI core proposes, the controller disposes** — the planner never touches the filesystem directly; only the sandboxed executor does, against an approved plan.
-- **If verification fails**, the replanner is invoked instead of silently giving up or retrying blindly.
+> Autonomy is only useful if you can trust it. FilePilot is built paranoid by default.
+
+- 🚫 **Nothing is deleted outright** — risky actions route through quarantine first, with restore available
+- 🔐 **Every operation is hash-verified** (SHA-256) before *and* after execution
+- 🤝 **The AI proposes, the controller disposes** — the planner never touches the filesystem directly; only the sandboxed executor does, against an approved plan
+- 🔁 **If verification fails**, the replanner kicks in instead of silently giving up or blindly retrying
 
 ---
 
-## Getting started
+## 🚀 Getting started
 
 ```bash
 git clone https://github.com/PriyaR-2006/Synora.git
 cd Synora
 
-# Backend
+# 🔌 Backend
 cd backend
 cp ../.env.example .env   # fill in your API keys (Grok/OpenAI, etc.)
 pip install -r requirements.txt
 uvicorn main:app --reload
 
-# Frontend
+# 🖥️ Frontend
 cd ../frontend
 npm install
 npm run dev
 ```
 
-> Adjust the commands above to match your actual entrypoint/scripts if they differ — this section is a placeholder based on the standard FastAPI + Vite layout and should be updated once the backend/frontend setup steps are finalized.
+> ⚠️ These commands are a best-guess placeholder based on the standard FastAPI + Vite layout — swap in the real entrypoint/scripts once they're finalized.
 
-## Roadmap
+---
 
-- [ ] Expand risk-scoring rules beyond file age/size heuristics
-- [ ] Add scheduled/background "future-aware" goals (e.g. recurring cleanup)
+## 🗺️ Roadmap
+
+- [ ] Expand risk-scoring beyond file age/size heuristics
+- [ ] "Future-aware" scheduled/recurring goals
 - [ ] Multi-workspace support
 - [ ] Richer Audit History (diff view per mission)
 
-## Contributing
+## 🤝 Contributing
 
-Issues and PRs are welcome. Please open an issue describing the change before submitting a large PR.
+Issues and PRs are welcome — open an issue describing the change before submitting a large PR.
 
-## License
+## 📄 License
 
-_Add a license (e.g. MIT) — none is currently specified in the repository._
+_No license specified yet — add one (MIT is a solid default) before accepting outside contributions._
+
+---
+
+<div align="center">
+
+**Built for the hackathon by [PriyaR-2006](https://github.com/PriyaR-2006)**
+
+</div>
