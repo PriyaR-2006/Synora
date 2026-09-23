@@ -150,14 +150,6 @@ npm run dev
 - [ ] Multi-workspace support
 - [ ] Richer Audit History (diff view per mission)
 
-## 🤝 Contributing
 
-Issues and PRs are welcome — open an issue describing the change before submitting a large PR.
-
-## 📄 License
-
-_No license specified yet — add one (MIT is a solid default) before accepting outside contributions._
-
----
 
 
