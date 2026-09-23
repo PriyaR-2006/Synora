@@ -160,8 +160,4 @@ _No license specified yet — add one (MIT is a solid default) before accepting 
 
 ---
 
-<div align="center">
 
-**Built for the hackathon by [PriyaR-2006](https://github.com/PriyaR-2006)**
-
-</div>
